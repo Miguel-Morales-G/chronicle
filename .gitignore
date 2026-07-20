@@ -1,0 +1,12 @@
+
+# Ignore environment and secrets files
+.env
+*.local.json
+secrets.*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Ignore all files inside these folders
