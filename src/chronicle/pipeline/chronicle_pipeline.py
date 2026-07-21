@@ -1,18 +1,41 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from chronicle.agents.librarian_decision_logger import (
-    DecisionLogPayload,
     LibrarianDecisionLogger,
     RawInput,
 )
-from chronicle.agents.library_director import LibraryDirector, Plan
+from chronicle.agents.library_director import AffectedFile, LibraryDirector, Plan
 from chronicle.io.knowledge_base import (
+    append_glossary_entries,
+    existing_glossary_terms,
     insert_at_top,
     next_dec_sequence,
     reverse_decision_entries,
+)
+
+
+_DEFAULT_DECISION_LOG_TEMPLATE = (
+    "## DEC-YYYY-MM-DD-### — <Short Title>\n\n"
+    "- **Status:** <Accepted | Rejected | Proposed | Superseded | [unavailable]>\n"
+    "- **Decision date:** <YYYY-MM-DD | [unavailable]>\n"
+    "- **Owner:** <Name | Team | [unavailable]>\n\n"
+    "### Context\n<Why was this decision needed?>\n\n"
+    "### Decision\n<What was decided?>\n\n"
+    "### Rationale\n- <Reason>\n\n"
+    "### Alternatives considered\n- <Alternative> — <why not>\n\n"
+    "### Consequences / Impact\n- <Consequence>\n\n"
+    "### References\n- `raw/<path-to-source-file>`\n"
+)
+
+_DEFAULT_GLOSSARY_TEMPLATE = (
+    "## <Term>\n\n"
+    "- **Category:** <domain | technical | process | [unavailable]>\n"
+    "- **Introduced in:** `raw/<path-to-source-file>`\n"
+    "- **Aliases:** <alias1, alias2 | omit if none>\n\n"
+    "<One or two sentence definition.>\n"
 )
 
 
@@ -23,20 +46,21 @@ class FileResult:
     Attributes:
         raw_path: The raw input file that was processed.
         plan:     The execution plan produced by the Library Director, if successful.
-        payload:  The decision-log payload produced by the Decision Logger, if applicable.
-        skipped:  True if the file was skipped (no applicable plan entry, missing refs, etc.).
+        payloads: Dict mapping compiled file paths to their serializable payload data.
+                  One entry per specialist that ran successfully.
+        skipped:  True if no specialist handled any affected file.
         error:    Error message string if a step failed, otherwise ``None``.
     """
 
     raw_path: Path
     plan: Optional[Plan]
-    payload: Optional[DecisionLogPayload]
+    payloads: Dict[str, Any]
     skipped: bool
     error: Optional[str]
 
 
 class ChroniclePipeline:
-    """Orchestrates the Chronicle two-step pipeline for a collection of raw artifacts.
+    """Orchestrates the Chronicle pipeline for a collection of raw artifacts.
 
     The pipeline maps the Intelligent Agents architecture:
     - ``raw/``      — artifact / input layer
@@ -46,18 +70,23 @@ class ChroniclePipeline:
     - ``out/``      — intermediate artifacts
 
     Step 1 (Library Director): Analyzes each raw file and produces a JSON execution plan.
-    Step 2 (Librarian Decision Logger): If the plan targets ``compiled/decision-log.md``,
-    compiles structured decision entries and inserts them into the knowledge base.
+    Step 2 (Specialist Dispatch): For each affected file in the plan, the corresponding
+    registered specialist handler is invoked to compile entries into the knowledge base.
+
+    Built-in active specialists:
+    - ``compiled/decision-log.md``  → Librarian Decision Logger
+    - ``compiled/glossary.md``      → Librarian Glossary Curator (when provided)
 
     Future specialist agents (Librarian Risk Curator, Librarian Status Keeper, etc.)
     can be registered via :meth:`register_specialist` without modifying core logic.
 
     Args:
-        director:      A :class:`~chronicle.agents.library_director.LibraryDirector` instance.
-        decision_logger: A :class:`~chronicle.agents.librarian_decision_logger.LibrarianDecisionLogger` instance.
-        compiled_dir:  Path to the ``compiled/`` shared external memory directory.
-        schema_dir:    Path to the ``schema/`` structural guardrails directory.
-        out_dir:       Path to the ``out/`` intermediate artifacts directory.
+        director:         A :class:`~chronicle.agents.library_director.LibraryDirector` instance.
+        decision_logger:  A :class:`~chronicle.agents.librarian_decision_logger.LibrarianDecisionLogger` instance.
+        compiled_dir:     Path to the ``compiled/`` shared external memory directory.
+        schema_dir:       Path to the ``schema/`` structural guardrails directory.
+        out_dir:          Path to the ``out/`` intermediate artifacts directory.
+        glossary_curator: Optional Librarian Glossary Curator instance.
     """
 
     def __init__(
@@ -67,47 +96,137 @@ class ChroniclePipeline:
         compiled_dir: Path,
         schema_dir: Path,
         out_dir: Path,
+        glossary_curator: Any = None,
     ) -> None:
         self.director = director
         self.decision_logger = decision_logger
+        self.glossary_curator = glossary_curator
         self.compiled_dir = Path(compiled_dir)
         self.schema_dir = Path(schema_dir)
         self.out_dir = Path(out_dir)
-        # Registry for future specialist agents keyed by compiled file path.
-        self._specialists: Dict[str, Any] = {}
 
-    def register_specialist(self, compiled_path: str, agent: Any) -> None:
-        """Register a specialist agent for a specific compiled file path.
+        # Specialist dispatch registry: compiled file path → handler callable.
+        # Handlers have signature: (affected_file: AffectedFile) -> Optional[dict]
+        self._specialists: Dict[str, Callable] = {
+            "compiled/decision-log.md": self._run_decision_log_specialist,
+        }
+        if glossary_curator is not None:
+            self._specialists["compiled/glossary.md"] = self._run_glossary_specialist
 
-        This hook enables future agents — such as ``LibrarianRiskCurator`` for
-        ``compiled/risks-and-open-questions.md`` — to be wired in without
-        modifying core pipeline logic.
+    def register_specialist(self, compiled_path: str, handler: Callable) -> None:
+        """Register a specialist handler for a specific compiled file path.
+
+        Enables future agents (e.g. ``LibrarianRiskCurator``) to be wired in
+        without modifying core pipeline logic.
+
+        The handler receives a single :class:`~chronicle.agents.library_director.AffectedFile`
+        and must return a JSON-serializable dict (the payload) or ``None``.
 
         Args:
-            compiled_path: The compiled file path this agent handles
+            compiled_path: Compiled file path this handler services
                            (e.g. ``"compiled/risks-and-open-questions.md"``).
-            agent:         The specialist agent instance.
+            handler:       Callable ``(affected_file: AffectedFile) -> Optional[dict]``.
         """
-        self._specialists[compiled_path] = agent
+        self._specialists[compiled_path] = handler
 
-    def _load_decision_log_template(self) -> str:
-        """Load the decision-log schema template, falling back to a minimal default."""
-        template_path = self.schema_dir / "compiled-templates" / "decision-log.md"
+    # ── Shared helpers ───────────────────────────────────────────────────────
+
+    def _load_template(self, filename: str, fallback: str) -> str:
+        """Load a schema template, returning a fallback string if not found."""
+        template_path = self.schema_dir / "compiled-templates" / filename
         if template_path.exists():
             return template_path.read_text(encoding="utf-8", errors="replace")
         print(f"  [warn] Template not found at {template_path}. Using fallback structure.")
-        return (
-            "## DEC-YYYY-MM-DD-### — <Short Title>\n\n"
-            "- **Status:** <Accepted | Rejected | Proposed | Superseded | [unavailable]>\n"
-            "- **Decision date:** <YYYY-MM-DD | [unavailable]>\n"
-            "- **Owner:** <Name | Team | [unavailable]>\n\n"
-            "### Context\n<Why was this decision needed?>\n\n"
-            "### Decision\n<What was decided?>\n\n"
-            "### Rationale\n- <Reason>\n\n"
-            "### Alternatives considered\n- <Alternative> — <why not>\n\n"
-            "### Consequences / Impact\n- <Consequence>\n\n"
-            "### References\n- `raw/<path-to-source-file>`\n"
+        return fallback
+
+    def _load_raw_inputs(self, affected_file: AffectedFile) -> List[RawInput]:
+        """Load raw source files referenced in a plan entry."""
+        raw_inputs: List[RawInput] = []
+        for ref in affected_file.raw_refs:
+            ref_path = Path(ref.split("#")[0])
+            try:
+                content = ref_path.read_text(encoding="utf-8", errors="replace")
+                raw_inputs.append(RawInput(ref=ref, content=content))
+            except FileNotFoundError:
+                print(f"  [warn] Raw ref not found, skipping: {ref_path}")
+        return raw_inputs
+
+    # ── Built-in specialist handlers ─────────────────────────────────────────
+
+    def _run_decision_log_specialist(
+        self, affected_file: AffectedFile
+    ) -> Optional[Dict[str, Any]]:
+        """Handle a plan entry targeting compiled/decision-log.md."""
+        compiled_path = self.compiled_dir / "decision-log.md"
+        template_text = self._load_template("decision-log.md", _DEFAULT_DECISION_LOG_TEMPLATE)
+        raw_inputs = self._load_raw_inputs(affected_file)
+        if not raw_inputs:
+            print(f"  [warn] No raw inputs found for {affected_file.path}. Skipping.")
+            return None
+
+        start_seq = next_dec_sequence(str(compiled_path))
+        print(f"  [info] Next DEC sequence: {start_seq:03d}")
+
+        payload = self.decision_logger.run(
+            plan=Plan(affected_files=[affected_file]),
+            raw_inputs=raw_inputs,
+            template_text=template_text,
+            start_seq=start_seq,
         )
+
+        payload_data = {
+            "append_to": payload.append_to,
+            "new_entries_markdown": payload.new_entries_markdown,
+        }
+        payload_out = self.out_dir / "decisionlog_payload.json"
+        payload_out.write_text(json.dumps(payload_data, indent=2), encoding="utf-8")
+        print(f"  [info] Payload saved to: {payload_out}")
+
+        reversed_entries = reverse_decision_entries(payload.new_entries_markdown)
+        insert_at_top(str(compiled_path), reversed_entries)
+        print(f"  [info] Entries inserted into: {compiled_path}")
+
+        return payload_data
+
+    def _run_glossary_specialist(
+        self, affected_file: AffectedFile
+    ) -> Optional[Dict[str, Any]]:
+        """Handle a plan entry targeting compiled/glossary.md."""
+        compiled_path = self.compiled_dir / "glossary.md"
+        template_text = self._load_template("glossary.md", _DEFAULT_GLOSSARY_TEMPLATE)
+        raw_inputs = self._load_raw_inputs(affected_file)
+        if not raw_inputs:
+            print(f"  [warn] No raw inputs found for {affected_file.path}. Skipping.")
+            return None
+
+        terms = existing_glossary_terms(str(compiled_path))
+        print(f"  [info] Existing glossary terms: {len(terms)}")
+
+        payload = self.glossary_curator.run(
+            plan=Plan(affected_files=[affected_file]),
+            raw_inputs=raw_inputs,
+            template_text=template_text,
+            existing_terms=terms,
+        )
+
+        if not payload.new_entries_markdown.strip():
+            print("  [info] No new glossary terms identified.")
+            return {"append_to": payload.append_to, "new_entries_markdown": ""}
+
+        payload_data = {
+            "append_to": payload.append_to,
+            "new_entries_markdown": payload.new_entries_markdown,
+        }
+        payload_out = self.out_dir / "glossary_payload.json"
+        payload_out.write_text(json.dumps(payload_data, indent=2), encoding="utf-8")
+        print(f"  [info] Payload saved to: {payload_out}")
+
+        append_glossary_entries(str(compiled_path), payload.new_entries_markdown)
+        print(f"  [info] Entries appended to: {compiled_path}")
+
+        return payload_data
+
+    # ── Core pipeline methods ────────────────────────────────────────────────
 
     def process_file(self, raw_path: Path) -> FileResult:
         """Run the full Chronicle pipeline for a single raw artifact.
@@ -126,12 +245,12 @@ class ChroniclePipeline:
             return FileResult(
                 raw_path=raw_path,
                 plan=None,
-                payload=None,
+                payloads={},
                 skipped=True,
                 error=f"File not found: {raw_path}",
             )
 
-        # ── Step 1: Library Director ─────────────────────────────────
+        # ── Step 1: Library Director ──────────────────────────────────────
         print(f"  [Step 1] Library Director analyzing: {raw_path.name}")
         try:
             plan = self.director.run(str(raw_path), raw_text)
@@ -139,7 +258,7 @@ class ChroniclePipeline:
             return FileResult(
                 raw_path=raw_path,
                 plan=None,
-                payload=None,
+                payloads={},
                 skipped=True,
                 error=f"Library Director failed: {exc}",
             )
@@ -161,72 +280,37 @@ class ChroniclePipeline:
         plan_out.write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
         print(f"  [Step 1] Plan saved to: {plan_out}")
 
-        if not plan.targets_decision_log():
-            print("  [Skip] Plan does not target decision-log for append.")
-            return FileResult(
-                raw_path=raw_path, plan=plan, payload=None, skipped=True, error=None
-            )
+        if not plan.affected_files:
+            print("  [Skip] Plan has no affected files.")
+            return FileResult(raw_path=raw_path, plan=plan, payloads={}, skipped=True, error=None)
 
-        # ── Step 2: Librarian Decision Logger ────────────────────────
-        print("  [Step 2] Librarian Decision Logger compiling entries...")
-        compiled_decision_log = self.compiled_dir / "decision-log.md"
-        template_text = self._load_decision_log_template()
+        # ── Step 2: Specialist dispatch ───────────────────────────────────
+        payloads: Dict[str, Any] = {}
+        errors: List[str] = []
+        any_handled = False
 
-        entry = plan.decision_log_entry()
-        raw_refs = entry.raw_refs if entry else []
-        raw_inputs: List[RawInput] = []
-        for ref in raw_refs:
-            ref_path = Path(ref.split("#")[0])
+        for affected_file in plan.affected_files:
+            handler = self._specialists.get(affected_file.path)
+            if handler is None:
+                print(
+                    f"  [Skip] No active specialist for '{affected_file.path}' — future work."
+                )
+                continue
+            any_handled = True
+            print(f"  [Step 2] Running specialist for: {affected_file.path}")
             try:
-                content = ref_path.read_text(encoding="utf-8", errors="replace")
-                raw_inputs.append(RawInput(ref=ref, content=content))
-            except FileNotFoundError:
-                print(f"  [warn] Raw ref not found, skipping: {ref_path}")
+                payload_data = handler(affected_file)
+                if payload_data is not None:
+                    payloads[affected_file.path] = payload_data
+            except Exception as exc:
+                errors.append(f"[{affected_file.path}] {exc}")
 
-        if not raw_inputs:
-            return FileResult(
-                raw_path=raw_path,
-                plan=plan,
-                payload=None,
-                skipped=True,
-                error="None of the raw_refs files could be found.",
-            )
+        if not any_handled:
+            return FileResult(raw_path=raw_path, plan=plan, payloads={}, skipped=True, error=None)
 
-        start_seq = next_dec_sequence(str(compiled_decision_log))
-        print(f"  [info] Next DEC sequence: {start_seq:03d}")
-
-        try:
-            payload = self.decision_logger.run(
-                plan=plan,
-                raw_inputs=raw_inputs,
-                template_text=template_text,
-                start_seq=start_seq,
-            )
-        except Exception as exc:
-            return FileResult(
-                raw_path=raw_path,
-                plan=plan,
-                payload=None,
-                skipped=False,
-                error=f"Librarian Decision Logger failed: {exc}",
-            )
-
-        # Persist payload to out/decisionlog_payload.json
-        payload_out = self.out_dir / "decisionlog_payload.json"
-        payload_data = {
-            "append_to": payload.append_to,
-            "new_entries_markdown": payload.new_entries_markdown,
-        }
-        payload_out.write_text(json.dumps(payload_data, indent=2), encoding="utf-8")
-        print(f"  [Step 2] Payload saved to: {payload_out}")
-
-        # Insert reversed entries at top of compiled/decision-log.md
-        reversed_entries = reverse_decision_entries(payload.new_entries_markdown)
-        insert_at_top(str(compiled_decision_log), reversed_entries)
-        print(f"  [Step 2] Entries inserted into: {compiled_decision_log}")
-
+        error = "\n".join(errors) if errors else None
         return FileResult(
-            raw_path=raw_path, plan=plan, payload=payload, skipped=False, error=None
+            raw_path=raw_path, plan=plan, payloads=payloads, skipped=False, error=error
         )
 
     def process_directory(self, raw_dir: Path) -> List[FileResult]:
@@ -268,3 +352,4 @@ class ChroniclePipeline:
                 print(f"  [ok] {raw_path.name} processed successfully.")
 
         return results
+
