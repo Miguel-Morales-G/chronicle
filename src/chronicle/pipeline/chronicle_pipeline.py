@@ -1,8 +1,20 @@
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from chronicle.audit.checks import (
+    Finding,
+    count_dec_entries,
+    count_glossary_terms,
+    run_all_checks,
+)
+from chronicle.audit.report import (
+    next_audit_sequence,
+    render_report,
+    write_audit_report,
+)
 from chronicle.agents.librarian_decision_logger import (
     LibrarianDecisionLogger,
     RawInput,
@@ -97,13 +109,24 @@ class ChroniclePipeline:
         schema_dir: Path,
         out_dir: Path,
         glossary_curator: Any = None,
+        auditor: Any = None,
+        audit_every: int = 5,
+        audit_now: bool = False,
+        reports_dir: Optional[Path] = None,
     ) -> None:
         self.director = director
         self.decision_logger = decision_logger
         self.glossary_curator = glossary_curator
+        self.auditor = auditor
+        self.audit_every = audit_every
+        self.audit_now = audit_now
         self.compiled_dir = Path(compiled_dir)
         self.schema_dir = Path(schema_dir)
         self.out_dir = Path(out_dir)
+        self.reports_dir = (
+            Path(reports_dir) if reports_dir is not None
+            else Path(compiled_dir).parent / "reports"
+        )
 
         # Specialist dispatch registry: compiled file path → handler callable.
         # Handlers have signature: (affected_file: AffectedFile) -> Optional[dict]
@@ -313,6 +336,80 @@ class ChroniclePipeline:
             raw_path=raw_path, plan=plan, payloads=payloads, skipped=False, error=error
         )
 
+    def _run_audit(self, trigger: str = "manual") -> Optional[Path]:
+        """Run the Auditor and write a timestamped report to ``reports/``.
+
+        Executes all five deterministic checks locally then makes one LLM call
+        (via the Auditor agent) for the semantic near-duplicate glossary check.
+        Writes the rendered Markdown report and returns its path.
+
+        Args:
+            trigger: Human-readable label for the run trigger
+                     (e.g. ``"every-5"``, ``"end-of-run"``, ``"manual"``).
+
+        Returns:
+            The :class:`~pathlib.Path` of the written report file,
+            or ``None`` if no Auditor is configured.
+        """
+        if self.auditor is None:
+            return None
+
+        print(f"\n{'═' * 60}")
+        print(f"  [Audit] Chronicle Auditor running ({trigger})...")
+        print(f"{'═' * 60}")
+
+        # Read compiled knowledge base (gracefully handle absent files)
+        dec_path = self.compiled_dir / "decision-log.md"
+        gls_path = self.compiled_dir / "glossary.md"
+        dec_text = (
+            dec_path.read_text(encoding="utf-8", errors="replace")
+            if dec_path.exists() else ""
+        )
+        gls_text = (
+            gls_path.read_text(encoding="utf-8", errors="replace")
+            if gls_path.exists() else ""
+        )
+
+        # Layer A — deterministic checks (no LLM)
+        deterministic: List[Finding] = run_all_checks(dec_text, gls_text)
+
+        # Layer B — LLM semantic check
+        semantic: List[Finding] = []
+        prompt_tokens: Optional[int] = None
+        completion_tokens: Optional[int] = None
+        try:
+            semantic = self.auditor.run(gls_text)
+            if self.auditor._last_llm_tokens:
+                prompt_tokens, completion_tokens = self.auditor._last_llm_tokens
+        except Exception as exc:
+            print(f"  [warn] Auditor semantic check failed: {exc}")
+
+        # Build metrics
+        today = date.today()
+        seq = next_audit_sequence(self.reports_dir, today)
+        metrics = {
+            "date": today.isoformat(),
+            "seq": seq,
+            "dec_entries": count_dec_entries(dec_text),
+            "glossary_terms": count_glossary_terms(gls_text),
+            "trigger": trigger,
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        }
+
+        content = render_report(deterministic, semantic, metrics)
+        report_path = write_audit_report(self.reports_dir, today, seq, content)
+
+        all_findings = deterministic + semantic
+        n_e = sum(1 for f in all_findings if f.severity == "error")
+        n_w = sum(1 for f in all_findings if f.severity == "warning")
+        n_n = sum(1 for f in all_findings if f.severity == "notice")
+        print(f"  [Audit] Report written: {report_path.name}")
+        print(f"  [Audit] {n_e} error(s), {n_w} warning(s), {n_n} notice(s)")
+
+        return report_path
+
     def process_directory(self, raw_dir: Path) -> List[FileResult]:
         """Run the Chronicle pipeline for all ``.md`` files in a directory.
 
@@ -320,6 +417,10 @@ class ChroniclePipeline:
         the original ``run_project_memory.ps1`` script.  Processing continues
         past individual file failures so a single bad artifact does not halt
         the entire run.
+
+        The Auditor (if configured) is triggered every ``audit_every`` files
+        and always at the end of the run if any files remain unaudited.
+        Pass ``audit_now=True`` to force a final audit regardless of count.
 
         Args:
             raw_dir: Directory containing raw ``.md`` artifact files.
@@ -338,18 +439,35 @@ class ChroniclePipeline:
 
         results: List[FileResult] = []
         total = len(md_files)
+        processed_since_audit = 0
+
         for idx, raw_path in enumerate(md_files, start=1):
             print(f"\n{'─' * 60}")
             print(f"  [{idx}/{total}] {raw_path.name}")
             print(f"{'─' * 60}")
             result = self.process_file(raw_path)
             results.append(result)
+            processed_since_audit += 1
+
             if result.error:
                 print(f"  [error] {result.error}")
             elif result.skipped:
                 print(f"  [skip] No applicable entries for this file.")
             else:
                 print(f"  [ok] {raw_path.name} processed successfully.")
+
+            # Periodic audit trigger
+            if (
+                self.auditor is not None
+                and self.audit_every > 0
+                and processed_since_audit >= self.audit_every
+            ):
+                self._run_audit(trigger=f"every-{self.audit_every}")
+                processed_since_audit = 0
+
+        # End-of-run audit: run if there are un-audited files OR audit_now is set.
+        if self.auditor is not None and (self.audit_now or processed_since_audit > 0):
+            self._run_audit(trigger="end-of-run")
 
         return results
 
