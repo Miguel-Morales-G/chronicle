@@ -12,6 +12,7 @@ import json
 import pytest
 from conftest import FakeLLMClient
 from chronicle.agents.librarian_decision_logger import LibrarianDecisionLogger
+from chronicle.agents.librarian_glossary_curator import LibrarianGlossaryCurator
 from chronicle.agents.library_director import LibraryDirector
 from chronicle.pipeline.chronicle_pipeline import ChroniclePipeline
 
@@ -46,10 +47,49 @@ _PAYLOAD_RESPONSE = json.dumps(
     }
 )
 
+_GLOSSARY_PLAN_RESPONSE = json.dumps(
+    {
+        "affected_files": [
+            {
+                "path": "compiled/glossary.md",
+                "operation": "additive",
+                "why": "Meeting introduces the term Chronicle.",
+                "raw_refs": ["raw/meetings/2026/test-meeting.md"],
+            }
+        ]
+    }
+)
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+_GLOSSARY_PAYLOAD_RESPONSE = json.dumps(
+    {
+        "append_to": "compiled/glossary.md",
+        "new_entries_markdown": (
+            "## Chronicle\n\n"
+            "- **Category:** domain\n"
+            "- **Introduced in:** `raw/meetings/2026/test-meeting.md`\n\n"
+            "A multi-agent LLM system.\n"
+        ),
+    }
+)
+
+_BOTH_PLAN_RESPONSE = json.dumps(
+    {
+        "affected_files": [
+            {
+                "path": "compiled/decision-log.md",
+                "operation": "append",
+                "why": "Contains a decision.",
+                "raw_refs": ["raw/meetings/2026/test-meeting.md"],
+            },
+            {
+                "path": "compiled/glossary.md",
+                "operation": "additive",
+                "why": "Introduces the term Chronicle.",
+                "raw_refs": ["raw/meetings/2026/test-meeting.md"],
+            },
+        ]
+    }
+)
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
@@ -75,12 +115,18 @@ def env(tmp_path, monkeypatch):
     (agents_dir / "librarian-decision-logger.md").write_text(
         "You are the Decision Logger.", encoding="utf-8"
     )
+    (agents_dir / "librarian-glossary-curator.md").write_text(
+        "You are the Glossary Curator.", encoding="utf-8"
+    )
 
     # Schema template
     schema_dir = tmp_path / "schema" / "compiled-templates"
     schema_dir.mkdir(parents=True)
     (schema_dir / "decision-log.md").write_text(
         "## DEC-YYYY-MM-DD-### — <Title>", encoding="utf-8"
+    )
+    (schema_dir / "glossary.md").write_text(
+        "## <Term>\n\n- **Introduced in:** `raw/<path>`", encoding="utf-8"
     )
 
     # Compiled dir (starts empty)
@@ -116,6 +162,37 @@ def _make_pipeline(env, plan_response=_PLAN_RESPONSE, payload_response=_PAYLOAD_
         compiled_dir=env["compiled_dir"],
         schema_dir=env["schema_dir"],
         out_dir=env["out_dir"],
+    )
+
+
+def _make_pipeline_with_glossary(
+    env,
+    plan_response=_PLAN_RESPONSE,
+    payload_response=_PAYLOAD_RESPONSE,
+    glossary_response=_GLOSSARY_PAYLOAD_RESPONSE,
+):
+    director = LibraryDirector(
+        name="Library Director",
+        system_prompt_path=str(env["agents_dir"] / "library-director.md"),
+        llm_client=FakeLLMClient(responses=[plan_response]),
+    )
+    decision_logger = LibrarianDecisionLogger(
+        name="Librarian Decision Logger",
+        system_prompt_path=str(env["agents_dir"] / "librarian-decision-logger.md"),
+        llm_client=FakeLLMClient(responses=[payload_response]),
+    )
+    glossary_curator = LibrarianGlossaryCurator(
+        name="Librarian Glossary Curator",
+        system_prompt_path=str(env["agents_dir"] / "librarian-glossary-curator.md"),
+        llm_client=FakeLLMClient(responses=[glossary_response]),
+    )
+    return ChroniclePipeline(
+        director=director,
+        decision_logger=decision_logger,
+        compiled_dir=env["compiled_dir"],
+        schema_dir=env["schema_dir"],
+        out_dir=env["out_dir"],
+        glossary_curator=glossary_curator,
     )
 
 
@@ -218,3 +295,81 @@ def test_process_directory_continues_past_failed_file(env, tmp_path):
     # First file errored, second succeeded
     assert results[0].error is not None
     assert results[1].error is None
+
+
+# ---------------------------------------------------------------------------
+# Glossary Curator dispatch tests
+# ---------------------------------------------------------------------------
+
+def test_glossary_plan_updates_glossary_file(env):
+    pipeline = _make_pipeline_with_glossary(
+        env,
+        plan_response=_GLOSSARY_PLAN_RESPONSE,
+        glossary_response=_GLOSSARY_PAYLOAD_RESPONSE,
+    )
+    result = pipeline.process_file(env["raw_file"])
+    assert result.error is None
+    assert not result.skipped
+    glossary = env["compiled_dir"] / "glossary.md"
+    assert glossary.exists()
+    assert "Chronicle" in glossary.read_text(encoding="utf-8")
+
+
+def test_glossary_plan_does_not_touch_decision_log(env):
+    pipeline = _make_pipeline_with_glossary(
+        env,
+        plan_response=_GLOSSARY_PLAN_RESPONSE,
+        glossary_response=_GLOSSARY_PAYLOAD_RESPONSE,
+    )
+    pipeline.process_file(env["raw_file"])
+    decision_log = env["compiled_dir"] / "decision-log.md"
+    assert not decision_log.exists()
+
+
+def test_both_specialists_run_when_plan_targets_both(env):
+    """When the plan targets both files, both specialists run."""
+    pipeline = _make_pipeline_with_glossary(
+        env,
+        plan_response=_BOTH_PLAN_RESPONSE,
+        payload_response=_PAYLOAD_RESPONSE,
+        glossary_response=_GLOSSARY_PAYLOAD_RESPONSE,
+    )
+    result = pipeline.process_file(env["raw_file"])
+    assert result.error is None
+    assert "compiled/decision-log.md" in result.payloads
+    assert "compiled/glossary.md" in result.payloads
+    assert (env["compiled_dir"] / "decision-log.md").exists()
+    assert (env["compiled_dir"] / "glossary.md").exists()
+
+
+def test_unregistered_compiled_path_is_skipped_not_error(env):
+    """A plan entry for a future compiled file produces no error — just a skip log."""
+    future_plan = json.dumps(
+        {
+            "affected_files": [
+                {
+                    "path": "compiled/risks-and-open-questions.md",
+                    "operation": "additive",
+                    "why": "New risk identified.",
+                    "raw_refs": ["raw/meetings/2026/test-meeting.md"],
+                }
+            ]
+        }
+    )
+    pipeline = _make_pipeline(env, plan_response=future_plan)
+    result = pipeline.process_file(env["raw_file"])
+    assert result.error is None
+    assert result.skipped is True
+
+
+def test_glossary_payload_json_written_to_out(env):
+    pipeline = _make_pipeline_with_glossary(
+        env,
+        plan_response=_GLOSSARY_PLAN_RESPONSE,
+        glossary_response=_GLOSSARY_PAYLOAD_RESPONSE,
+    )
+    pipeline.process_file(env["raw_file"])
+    payload_file = env["out_dir"] / "glossary_payload.json"
+    assert payload_file.exists()
+    data = json.loads(payload_file.read_text(encoding="utf-8"))
+    assert "new_entries_markdown" in data

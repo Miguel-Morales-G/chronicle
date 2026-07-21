@@ -1,5 +1,7 @@
 import pytest
 from chronicle.io.knowledge_base import (
+    append_glossary_entries,
+    existing_glossary_terms,
     insert_at_top,
     next_dec_sequence,
     reverse_decision_entries,
@@ -131,3 +133,79 @@ def test_reverse_decision_entries_separates_entries_with_blank_line():
     )
     result = reverse_decision_entries(md)
     assert "\n\n" in result
+
+
+# ---------------------------------------------------------------------------
+# existing_glossary_terms
+# ---------------------------------------------------------------------------
+
+def test_existing_glossary_terms_missing_file_returns_empty(tmp_path):
+    missing = tmp_path / "glossary.md"
+    assert existing_glossary_terms(str(missing)) == []
+
+
+def test_existing_glossary_terms_empty_file_returns_empty(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    glossary.write_text("", encoding="utf-8")
+    assert existing_glossary_terms(str(glossary)) == []
+
+
+def test_existing_glossary_terms_parses_headings(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    glossary.write_text(
+        "# Glossary\n\n## Chronicle\n\nA system.\n\n## Pipeline\n\nA flow.\n",
+        encoding="utf-8",
+    )
+    terms = existing_glossary_terms(str(glossary))
+    assert "Chronicle" in terms
+    assert "Pipeline" in terms
+
+
+def test_existing_glossary_terms_preserves_order(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    glossary.write_text(
+        "## Alpha\n\ndef\n\n## Beta\n\ndef\n\n## Gamma\n\ndef\n",
+        encoding="utf-8",
+    )
+    terms = existing_glossary_terms(str(glossary))
+    assert terms == ["Alpha", "Beta", "Gamma"]
+
+
+# ---------------------------------------------------------------------------
+# append_glossary_entries
+# ---------------------------------------------------------------------------
+
+def test_append_glossary_entries_creates_file_with_header(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    append_glossary_entries(str(glossary), "## Chronicle\n\nA system.\n")
+    content = glossary.read_text(encoding="utf-8")
+    assert "# Glossary" in content
+    assert "## Chronicle" in content
+
+
+def test_append_glossary_entries_appends_to_existing(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    glossary.write_text("# Glossary\n\n## Alpha\n\nFirst term.\n", encoding="utf-8")
+    append_glossary_entries(str(glossary), "## Beta\n\nSecond term.\n")
+    content = glossary.read_text(encoding="utf-8")
+    assert "## Alpha" in content
+    assert "## Beta" in content
+
+
+def test_append_glossary_entries_preserves_prior_content(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    glossary.write_text("# Glossary\n\n## Alpha\n\nKeep this.\n", encoding="utf-8")
+    append_glossary_entries(str(glossary), "## Beta\n\nNew.\n")
+    assert "Keep this." in glossary.read_text(encoding="utf-8")
+
+
+def test_append_glossary_entries_skips_empty_markdown(tmp_path):
+    glossary = tmp_path / "glossary.md"
+    append_glossary_entries(str(glossary), "   ")
+    assert not glossary.exists()
+
+
+def test_append_glossary_entries_creates_parent_dirs(tmp_path):
+    nested = tmp_path / "sub" / "glossary.md"
+    append_glossary_entries(str(nested), "## Term\n\ndef\n")
+    assert nested.exists()
