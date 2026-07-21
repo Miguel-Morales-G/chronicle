@@ -1,8 +1,10 @@
 import re
 from pathlib import Path
+from typing import List
 
 
 _DEC_PATTERN = re.compile(r"DEC-(\d{4}-\d{2}-\d{2})-(\d{3})", re.IGNORECASE)
+_TERM_HEADING = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 
 
 def next_dec_sequence(compiled_path: str) -> int:
@@ -55,6 +57,48 @@ def insert_at_top(compiled_path: str, new_markdown: str) -> None:
     after = "".join(lines[insert_at:])
     updated = before + new_markdown.strip() + separator + after
     p.write_text(updated, encoding="utf-8")
+
+
+def existing_glossary_terms(compiled_path: str) -> List[str]:
+    """Return a list of term strings already defined in the compiled glossary.
+
+    Parses level-2 headings (``## <Term>``) from the file.  Returns an empty
+    list if the file is absent or empty.
+
+    Args:
+        compiled_path: Path to the compiled glossary markdown file.
+
+    Returns:
+        List of term strings in the order they appear in the file.
+    """
+    p = Path(compiled_path)
+    if not p.exists() or p.stat().st_size == 0:
+        return []
+    text = p.read_text(encoding="utf-8", errors="replace")
+    return [m.group(1).strip() for m in _TERM_HEADING.finditer(text)]
+
+
+def append_glossary_entries(compiled_path: str, new_markdown: str) -> None:
+    """Append new glossary entries to the compiled glossary file.
+
+    If the file does not exist or is empty, it is created with a
+    ``# Glossary`` level-1 header followed by the new content.
+    Otherwise the new block is appended at the end, separated by a blank line.
+
+    Args:
+        compiled_path: Path to the compiled glossary markdown file.
+        new_markdown:  The new Markdown block to append.
+    """
+    p = Path(compiled_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not new_markdown.strip():
+        return
+    if not p.exists() or p.stat().st_size == 0:
+        p.write_text("# Glossary\n\n" + new_markdown.strip() + "\n", encoding="utf-8")
+    else:
+        existing = p.read_text(encoding="utf-8", errors="replace")
+        updated = existing.rstrip() + "\n\n" + new_markdown.strip() + "\n"
+        p.write_text(updated, encoding="utf-8")
 
 
 def reverse_decision_entries(md: str) -> str:
