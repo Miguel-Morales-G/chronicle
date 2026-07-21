@@ -129,6 +129,20 @@ def test_render_report_shows_llm_tokens_when_available():
     assert "completion=45" in content
 
 
+def test_render_report_llm_call_count_line_shows_two_calls():
+    """When llm_call_count=2, the report shows 'LLM calls: 2'."""
+    metrics = {
+        **_BASE_METRICS,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "llm_call_count": 2,
+    }
+    content = render_report([], [], metrics)
+    assert "LLM calls: 2" in content
+    assert "prompt=20" in content
+    assert "completion=10" in content
+
+
 def test_render_report_summary_counts_correct():
     det = [
         Finding("error", "duplicate-dec-id", "loc", "d", "r"),

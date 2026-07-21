@@ -3,6 +3,7 @@
 import pytest
 from chronicle.audit.checks import (
     Finding,
+    compress_decisions_for_audit,
     count_dec_entries,
     count_glossary_terms,
     find_decisions_missing_references,
@@ -246,3 +247,107 @@ def test_run_all_checks_returns_combined_findings():
 
 def test_run_all_checks_empty_inputs_returns_empty():
     assert run_all_checks("", "") == []
+
+
+# ── compress_decisions_for_audit ─────────────────────────────────────────────
+
+_SINGLE_DEC_ENTRY = """\
+## DEC-2026-07-21-001 — Use Python
+
+- **Status:** Accepted
+- **Decision date:** 2026-07-21
+- **Owner:** Team
+
+### Context
+We needed a scripting language.
+
+### Decision
+Use Python.
+
+### Rationale
+- Widely known.
+
+### References
+- `raw/meetings/2026/kickoff.md`
+"""
+
+_TWO_DEC_ENTRIES = _SINGLE_DEC_ENTRY + """\
+## DEC-2026-07-21-002 — Use pytest
+
+- **Status:** Accepted
+- **Decision date:** 2026-07-21
+- **Owner:** Team
+
+### Context
+We needed a test framework.
+
+### Decision
+Use pytest for all unit tests.
+
+### Rationale
+- Best in class.
+
+### References
+- `raw/meetings/2026/kickoff.md`
+"""
+
+
+def test_compress_decisions_empty_string():
+    assert compress_decisions_for_audit("") == ""
+
+
+def test_compress_decisions_whitespace_only():
+    assert compress_decisions_for_audit("   \n  ") == ""
+
+
+def test_compress_decisions_single_entry_one_line():
+    result = compress_decisions_for_audit(_SINGLE_DEC_ENTRY)
+    lines = result.splitlines()
+    assert len(lines) == 1
+
+
+def test_compress_decisions_single_entry_contains_id_and_title():
+    result = compress_decisions_for_audit(_SINGLE_DEC_ENTRY)
+    assert "`DEC-2026-07-21-001`" in result
+    assert "Use Python" in result
+
+
+def test_compress_decisions_single_entry_contains_decision_sentence():
+    result = compress_decisions_for_audit(_SINGLE_DEC_ENTRY)
+    assert "Use Python." in result
+
+
+def test_compress_decisions_single_entry_contains_date():
+    result = compress_decisions_for_audit(_SINGLE_DEC_ENTRY)
+    assert "2026-07-21" in result
+
+
+def test_compress_decisions_two_entries_two_lines():
+    result = compress_decisions_for_audit(_TWO_DEC_ENTRIES)
+    lines = result.splitlines()
+    assert len(lines) == 2
+    assert "`DEC-2026-07-21-001`" in lines[0]
+    assert "`DEC-2026-07-21-002`" in lines[1]
+
+
+def test_compress_decisions_missing_decision_section_shows_unavailable():
+    entry = """\
+## DEC-2026-07-21-003 — A Decision
+
+- **Decision date:** 2026-07-22
+- **Status:** Accepted
+
+### References
+- `raw/x.md`
+"""
+    result = compress_decisions_for_audit(entry)
+    assert "[unavailable]" in result
+
+
+def test_compress_decisions_skips_non_dec_headings():
+    text = "# Decision Log\n\nSome intro text.\n" + _SINGLE_DEC_ENTRY
+    result = compress_decisions_for_audit(text)
+    lines = result.splitlines()
+    # Only the DEC entry should produce a line.
+    assert len(lines) == 1
+    assert "`DEC-2026-07-21-001`" in lines[0]
