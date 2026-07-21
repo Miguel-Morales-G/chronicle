@@ -22,4 +22,4 @@ build/
 .vscode/
 
 # Ignore all files inside these folders
-raw/
+out/
