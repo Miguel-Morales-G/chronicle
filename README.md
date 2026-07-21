@@ -220,3 +220,56 @@ After each batch of compilation (controlled via `--audit-every N` flag), the **A
 - **Continuous evaluation** — the Auditor provides deterministic + semantic quality checks after every batch, surfacing issues without blocking the pipeline.
 - **Extensibility** — future specialist agents plug into `ChroniclePipeline.register_specialist()` without modifying core logic; new deterministic checks can be added to `chronicle.audit.checks` independently.
 
+---
+
+## Why LLM-Based Agents?
+
+Project artifacts such as meeting notes, design reviews, status updates, and planning documents contain largely unstructured natural language that is difficult to process through deterministic techniques alone. Chronicle uses LLM-based agents to provide:
+
+- **Semantic understanding** — Parse intent and meaning from free-form text without rigid parsing rules.
+- **Task decomposition** — Break down complex extraction tasks (e.g., "identify all decisions in this meeting note").
+- **Structured information extraction** — Transform unstructured input into JSON-conformant entries following schema templates.
+- **Semantic evaluation** — Detect near-duplicate concepts and relationships across the knowledge base.
+
+Deterministic logic is used where possible for repeatability, validation, and guardrails — the five audit checks require no LLM calls and catch structural issues instantly.
+
+---
+
+## Current Limitations
+
+Chronicle is intentionally scoped as a course final project. Current limitations include:
+
+- **Limited agent coverage** — Only Decision Logger and Glossary Curator are implemented. Risk Curator, Status Keeper, Change Historian, and Question Tracker are future work.
+- **Single-backend storage** — Compiled knowledge is stored as Markdown files; alternative backends (databases, vector stores) are not yet supported.
+- **Semantic quality depends on LLM reasoning** — Duplicate detection accuracy varies with model capability and prompt design. False positives are possible.
+- **No human review workflows** — Audit findings are advisory only; there is no built-in approval or rollback mechanism.
+- **Single-language support** — All prompts and templates assume English-language artifacts.
+
+---
+
+## Example Flow
+
+Here is a simple example of how Chronicle processes a raw artifact:
+
+```
+Raw Artifact: 2026-01-22-energy-strategy.md
+        │
+        ├─► Library Director (Planning Mode)
+        │   └─► Execution Plan: Update decision-log.md, Update glossary.md
+        │
+        ├─► Librarian Decision Logger (Compilation Mode)
+        │   └─► New Decision: DEC-2026-01-22-007 (Solar generation as primary source)
+        │
+        ├─► Librarian Glossary Curator (Compilation Mode)
+        │   └─► New Term: Hydrogen Storage
+        │
+        └─► Auditor (Evaluation Phase)
+            ├─► Deterministic Checks: 5 passed
+            ├─► Semantic Checks: No glossary/decision duplicates detected
+            └─► Report: audit-report-2026-01-22-001.md (OK status, 0 findings)
+```
+
+All intermediate artifacts (plan, payloads) are saved to `out/`; token usage is logged; and the audit report is saved to `reports/`.
+
+---
+
