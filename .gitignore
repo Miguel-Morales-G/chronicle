@@ -3,11 +3,23 @@
 .env
 *.local.json
 secrets.*
+
+# Python build and packaging artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Logs and test output
 *.log
+.pytest_cache/
+
+# IDE
+.vscode/
 
 # Ignore all files inside these folders
 raw/
