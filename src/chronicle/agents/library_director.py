@@ -47,6 +47,13 @@ class Plan:
                 return f
         return None
 
+    def glossary_entry(self) -> Optional[AffectedFile]:
+        """Return the glossary ``AffectedFile`` entry, or ``None`` if absent."""
+        for f in self.affected_files:
+            if f.path == "compiled/glossary.md" and f.operation == "additive":
+                return f
+        return None
+
 
 class LibraryDirector(BaseAgent):
     """Orchestrator agent.

@@ -44,15 +44,16 @@ the relevant compiled file in your `affected_files` plan output.
 | Specialist Agent             | Compiled Target File                       | Status   |
 |------------------------------|--------------------------------------------|----------|
 | Librarian Decision Logger    | `compiled/decision-log.md`                 | Active   |
+| Librarian Glossary Curator   | `compiled/glossary.md`                     | Active   |
 | Librarian Risk Curator       | `compiled/risks-and-open-questions.md`     | Future   |
 | Librarian Status Keeper      | `compiled/current-status.md`               | Future   |
 | Librarian Change Historian   | `compiled/change-history.md`               | Future   |
-| Librarian Glossary Curator   | `compiled/glossary.md`                     | Future   |
 | Librarian Question Tracker   | `compiled/risks-and-open-questions.md`     | Future   |
 
-**For the current implementation**, only `compiled/decision-log.md` is handled by an
-active specialist. Include other files in the plan only if clearly justified; they will
-be logged but not acted on until the corresponding specialists are implemented.
+**For the current implementation**, `compiled/decision-log.md` and `compiled/glossary.md`
+are handled by active specialists. Include other files in the plan only if clearly
+justified; they will be logged but not acted on until the corresponding specialists
+are implemented.
 
 ---
 
@@ -87,6 +88,7 @@ Return **only** a single JSON object. No Markdown, no commentary, no preamble.
 
 - Include **only** files that are clearly impacted by the raw input.
 - If the raw input contains decisions, include `compiled/decision-log.md` with `"operation": "append"`.
+- If the raw input introduces or explicitly defines new domain, technical, or process terms, include `compiled/glossary.md` with `"operation": "additive"`.
 - If the raw input contains risk or open-question content, include `compiled/risks-and-open-questions.md`.
 - If the raw input describes a status change, include `compiled/current-status.md` with `"operation": "in_place"`.
 - Keep `why` to one concise sentence.
