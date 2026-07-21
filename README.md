@@ -196,6 +196,19 @@ After each batch of compilation (controlled via `--audit-every N` flag), the **A
 
 3. An **audit report** is generated (Markdown) with findings grouped by severity (errors, warnings, notices) and token metrics, saved to `reports/audit-report-YYYY-MM-DD-###.md`.
 
+#### Audit Checks Summary Table
+
+
+| Check Name | Type | Severity | Description |
+|---|---|---|---|
+| **duplicate-dec-id** | Deterministic | Error | Two or more decision entries share the same DEC-ID. Indicates a data entry error; renumbering is required. |
+| **malformed-dec-id** | Deterministic | Error | A token starting with `DEC-` does not match the format `DEC-YYYY-MM-DD-###` (4-digit year, 2-digit month, 2-digit day, 3-digit sequence). |
+| **decision-missing-references** | Deterministic | Warning | A decision entry lacks a `### References` section citing the raw source artifact(s). Reduces traceability. |
+| **glossary-missing-introduced-in** | Deterministic | Warning | A glossary term entry lacks the `**Introduced in:**` metadata bullet linking to the raw source. Breaks traceability chain. |
+| **duplicate-glossary-heading** | Deterministic | Error | Two glossary entries have the same term heading (case-insensitive). Indicates a merge/deduplication opportunity. |
+| **glossary-semantic-duplicates** | LLM | Notice | Two or more glossary terms appear to describe the same project concept under different names (e.g., "Knowledge Base" and "Shared Memory"). Suggests consolidation or cross-reference. |
+| **decision-semantic-duplicates** | LLM | Notice | Two or more decision entries appear to record the same decision under different titles or with the same core outcome. Suggests consolidation or explicit cross-reference. |
+
 ---
 
 ## Design principles
