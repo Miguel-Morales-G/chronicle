@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from chronicle.agents.librarian_decision_logger import LibrarianDecisionLogger
+from chronicle.agents.librarian_glossary_curator import LibrarianGlossaryCurator
 from chronicle.agents.library_director import LibraryDirector
 from chronicle.llm.azure_openai_client import AzureOpenAIClient
 from chronicle.pipeline.chronicle_pipeline import ChroniclePipeline
@@ -96,6 +97,11 @@ def main() -> int:
         system_prompt_path=str(agents_dir / "librarian-decision-logger.md"),
         llm_client=llm_client,
     )
+    glossary_curator = LibrarianGlossaryCurator(
+        name="Librarian Glossary Curator",
+        system_prompt_path=str(agents_dir / "librarian-glossary-curator.md"),
+        llm_client=llm_client,
+    )
 
     pipeline = ChroniclePipeline(
         director=director,
@@ -103,6 +109,7 @@ def main() -> int:
         compiled_dir=Path(args.compiled_dir),
         schema_dir=Path(args.schema_dir),
         out_dir=Path(args.out_dir),
+        glossary_curator=glossary_curator,
     )
 
     results = pipeline.process_directory(Path(args.raw_dir))
@@ -113,7 +120,7 @@ def main() -> int:
 
     print(f"\n{'=' * 60}")
     print(f"  Chronicle complete — {ok} processed, {skipped} skipped, {errors} error(s)")
-    print(f"  Compiled knowledge base: {args.compiled_dir}/decision-log.md")
+    print(f"  Compiled knowledge base: {args.compiled_dir}/")
     print(f"{'=' * 60}\n")
 
     return 0 if errors == 0 else 1
