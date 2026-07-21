@@ -5,6 +5,7 @@ from pathlib import Path
 from chronicle.agents.librarian_decision_logger import LibrarianDecisionLogger
 from chronicle.agents.librarian_glossary_curator import LibrarianGlossaryCurator
 from chronicle.agents.library_director import LibraryDirector
+from chronicle.audit.auditor import Auditor
 from chronicle.llm.azure_openai_client import AzureOpenAIClient
 from chronicle.pipeline.chronicle_pipeline import ChroniclePipeline
 
@@ -68,6 +69,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Max completion tokens for the Librarian Decision Logger (default: 800)",
     )
+    parser.add_argument(
+        "--reports-dir",
+        default="reports",
+        metavar="DIR",
+        help="Audit report output directory (default: reports)",
+    )
+    parser.add_argument(
+        "--audit-every",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Run the Auditor every N processed files; 0 disables periodic audit (default: 5)",
+    )
+    parser.add_argument(
+        "--audit-now",
+        action="store_true",
+        help="Force an audit at the end of the run regardless of file count",
+    )
+    parser.add_argument(
+        "--no-audit",
+        action="store_true",
+        help="Disable the Auditor entirely for this run",
+    )
     return parser
 
 
@@ -103,6 +127,14 @@ def main() -> int:
         llm_client=llm_client,
     )
 
+    auditor = None
+    if not args.no_audit:
+        auditor = Auditor(
+            name="Auditor",
+            system_prompt_path=str(agents_dir / "auditor.md"),
+            llm_client=llm_client,
+        )
+
     pipeline = ChroniclePipeline(
         director=director,
         decision_logger=decision_logger,
@@ -110,6 +142,10 @@ def main() -> int:
         schema_dir=Path(args.schema_dir),
         out_dir=Path(args.out_dir),
         glossary_curator=glossary_curator,
+        auditor=auditor,
+        audit_every=args.audit_every,
+        audit_now=args.audit_now,
+        reports_dir=Path(args.reports_dir),
     )
 
     results = pipeline.process_directory(Path(args.raw_dir))
