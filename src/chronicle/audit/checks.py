@@ -37,6 +37,14 @@ _INTRODUCED_IN = re.compile(r"\*\*Introduced in:", re.IGNORECASE)
 # Level-2 heading term (used for glossary).
 _TERM_HEADING = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 
+# Metadata bullet: **Decision date:** <value>
+_DEC_DATE_BULLET = re.compile(r"\*\*Decision date:\*\*\s*(.+)")
+
+# ### Decision section body (up to the next ### heading or end of string).
+_DECISION_BODY = re.compile(
+    r"###\s+Decision\s*\n(.*?)(?=\n###|\Z)", re.DOTALL | re.IGNORECASE
+)
+
 
 # ── Finding dataclass ─────────────────────────────────────────────────────────
 
@@ -261,6 +269,72 @@ def find_duplicate_glossary_headings(
 
 
 # ── Counting helpers (used by pipeline metrics) ───────────────────────────────
+
+
+def compress_decisions_for_audit(text: str) -> str:
+    """Build a compact one-line-per-entry summary of decision-log entries.
+
+    Each entry is compressed to the format::
+
+        `DEC-ID` | Title | Decision sentence | Date
+
+    This keeps the LLM prompt small and focused while providing all the
+    information needed to detect semantic near-duplicate decisions.
+
+    Args:
+        text: Full text of ``compiled/decision-log.md``.
+
+    Returns:
+        A newline-joined string with one compressed line per DEC entry,
+        or an empty string if no entries are found.
+    """
+    if not text.strip():
+        return ""
+
+    entries = _H2_SPLIT.split(text.strip())
+    lines = []
+
+    for entry in entries:
+        entry = entry.strip()
+        if not entry.startswith("## DEC-"):
+            continue
+
+        first_line = entry.splitlines()[0] if entry else ""
+
+        # Extract DEC-ID and title from the heading line.
+        id_title_match = re.match(
+            r"^##\s+(DEC-\d{4}-\d{2}-\d{2}-\d{3})\s*[\u2014\u2013\-]+\s*(.+)$",
+            first_line,
+        )
+        if id_title_match:
+            dec_id = id_title_match.group(1)
+            title = id_title_match.group(2).strip()
+        else:
+            id_match = re.match(r"^##\s+(DEC-\d{4}-\d{2}-\d{2}-\d{3})", first_line)
+            dec_id = id_match.group(1) if id_match else "DEC-UNKNOWN"
+            title = first_line.lstrip("#").strip()
+
+        # Extract the first content sentence from ### Decision.
+        decision_text = "[unavailable]"
+        body_match = _DECISION_BODY.search(entry)
+        if body_match:
+            for line in body_match.group(1).splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith("-"):
+                    decision_text = line
+                    break
+
+        # Date: from **Decision date:** bullet; fall back to date in DEC-ID.
+        date_text = dec_id[4:14]  # "YYYY-MM-DD" embedded in "DEC-YYYY-MM-DD-###"
+        date_match = _DEC_DATE_BULLET.search(entry)
+        if date_match:
+            raw_date = date_match.group(1).strip()
+            if raw_date and raw_date != "[unavailable]":
+                date_text = raw_date
+
+        lines.append(f"`{dec_id}` | {title} | {decision_text} | {date_text}")
+
+    return "\n".join(lines)
 
 
 def count_dec_entries(text: str) -> int:

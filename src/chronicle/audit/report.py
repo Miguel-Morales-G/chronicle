@@ -140,13 +140,16 @@ def render_report(
             ]
 
     # ── Metrics ───────────────────────────────────────────────────────────────
+    call_count = metrics.get(
+        "llm_call_count",
+        1 if metrics.get("prompt_tokens") is not None else 0,
+    )
     pt = metrics.get("prompt_tokens")
     ct = metrics.get("completion_tokens")
-    llm_line = (
-        f"- LLM calls: 1 (tokens: prompt={pt}, completion={ct})"
-        if pt is not None
-        else "- LLM calls: 0 (glossary absent — semantic check skipped)"
-    )
+    if call_count == 0:
+        llm_line = "- LLM calls: 0 (semantic check skipped — knowledge base is empty)"
+    else:
+        llm_line = f"- LLM calls: {call_count} (tokens: prompt={pt}, completion={ct})"
     lines += [
         "## Metrics\n",
         f"- Decision entries: {metrics['dec_entries']}",

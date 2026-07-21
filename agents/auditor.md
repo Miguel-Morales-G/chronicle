@@ -45,12 +45,19 @@ at the end of each run.
 ## What to Read (Inputs)
 
 The agent harness will provide in the user prompt:
-- The full text of `compiled/glossary.md` (or an empty string if it does not exist).
+- The full text of `compiled/glossary.md` (or an empty string if it does not exist)
+  for the **glossary near-duplicate check**.
+- A compressed summary of decision entries from `compiled/decision-log.md` for the
+  **decision near-duplicate check**.  Each line has the format:
+  `` `DEC-ID` | Title | Decision sentence | Date ``
 
 The five deterministic checks are run by the harness directly (no LLM required).
-Your one LLM task is to perform the **semantic near-duplicate glossary check**:
-identify pairs or groups of terms that appear to describe the same concept
-under different names.
+Your **two LLM tasks** are:
+1. Detect semantic near-duplicate **glossary terms**.
+2. Detect semantic near-duplicate **decision entries** (when ≥ 2 entries exist).
+
+The harness makes **two separate prompt calls** — one per task.  Each call is
+independent; you will not see both inputs in the same prompt.
 
 ---
 
@@ -77,7 +84,7 @@ Return `"semantic_findings": []` if no near-duplicate pairs are found.
 
 ---
 
-## Semantic Near-Duplicate Check
+## Semantic Near-Duplicate Glossary Check
 
 A **near-duplicate** is two or more glossary terms that appear to describe the
 same project concept under different names.
@@ -93,6 +100,39 @@ same project concept under different names.
 - Terms that are related but genuinely distinct (e.g. "Pipeline" vs. "Agent").
 - General synonyms that carry different project-specific meanings.
 - Terms where one is clearly a broader category and the other a specific instance.
+
+---
+
+## Semantic Near-Duplicate Decisions Check
+
+A **near-duplicate decision** is two or more entries that record essentially the
+same decision under different titles or IDs.
+
+You will receive one compressed line per entry:
+
+```
+`DEC-ID` | Title | Decision sentence | Date
+```
+
+### Examples of likely near-duplicate decisions
+
+- Two entries both choosing the same technology for the same purpose, recorded
+  months apart without cross-reference.
+- Two entries both rejecting the same alternative approach.
+- Two entries with different titles but identical decision sentences.
+
+### Not a near-duplicate decision
+
+- A decision that revisits and **reverses** an earlier one (different outcome).
+- A decision that refines scope but applies to a genuinely different sub-system.
+- Two decisions that happen to mention the same technology but address different
+  trade-offs.
+
+### Location format for decision findings
+
+```
+"compiled/decision-log.md — DEC-YYYY-MM-DD-### / DEC-YYYY-MM-DD-###"
+```
 
 ---
 

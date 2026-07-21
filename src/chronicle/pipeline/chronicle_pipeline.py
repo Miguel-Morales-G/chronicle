@@ -378,7 +378,7 @@ class ChroniclePipeline:
         prompt_tokens: Optional[int] = None
         completion_tokens: Optional[int] = None
         try:
-            semantic = self.auditor.run(gls_text)
+            semantic = self.auditor.run(gls_text, decision_log_text=dec_text)
             if self.auditor._last_llm_tokens:
                 prompt_tokens, completion_tokens = self.auditor._last_llm_tokens
         except Exception as exc:
@@ -396,6 +396,7 @@ class ChroniclePipeline:
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "llm_call_count": getattr(self.auditor, "_last_llm_call_count", 0),
         }
 
         content = render_report(deterministic, semantic, metrics)
