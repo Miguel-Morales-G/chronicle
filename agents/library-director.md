@@ -116,6 +116,14 @@ The system does not depend on any specific storage backend.
 
 ---
 
+## Peer Agents
+
+The **Auditor** is a separate peer agent — not a specialist under the Library Director.
+It evaluates the compiled knowledge base periodically and writes to `reports/`.
+Do **not** include `reports/` in your `affected_files` plan output.
+
+---
+
 ## Quality Bar
 
 - Deterministic and machine-parseable output (strict JSON).
