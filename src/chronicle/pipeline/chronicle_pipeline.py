@@ -411,6 +411,27 @@ class ChroniclePipeline:
 
         return report_path
 
+    def _cleanup_out_dir(self) -> None:
+        """Remove all intermediate artifacts from the out/ directory.
+
+        This removes temporary files (plan.json, payloads) generated during the run.
+        Called automatically at the end of process_directory() to keep the workspace clean.
+        """
+        if not self.out_dir.exists():
+            return
+
+        try:
+            import shutil
+            # Remove all contents of out/ directory
+            for item in self.out_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+            print(f"\n  [Cleanup] Intermediate artifacts removed from {self.out_dir}/")
+        except Exception as exc:
+            print(f"  [warn] Could not clean {self.out_dir}/: {exc}")
+
     def process_directory(self, raw_dir: Path) -> List[FileResult]:
         """Run the Chronicle pipeline for all ``.md`` files in a directory.
 
@@ -469,6 +490,9 @@ class ChroniclePipeline:
         # End-of-run audit: run if there are un-audited files OR audit_now is set.
         if self.auditor is not None and (self.audit_now or processed_since_audit > 0):
             self._run_audit(trigger="end-of-run")
+
+        # Clean up intermediate artifacts from out/ directory.
+        self._cleanup_out_dir()
 
         return results
 
