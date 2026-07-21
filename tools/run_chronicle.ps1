@@ -11,6 +11,11 @@
 
 $ErrorActionPreference = "Stop"
 
+# Ensure the src/ package root is on PYTHONPATH so 'python -m chronicle'
+# works whether or not the package has been installed with 'pip install -e .'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$env:PYTHONPATH = "$repoRoot\src" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
+
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Chronicle — Continuous Project Knowledge Compilation" -ForegroundColor Cyan

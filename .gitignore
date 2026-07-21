@@ -10,3 +10,4 @@ __pycache__/
 *.log
 
 # Ignore all files inside these folders
+raw/
