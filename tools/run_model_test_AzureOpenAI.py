@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 import base64
 from openai import AzureOpenAI
-from tools.tokens_usage import log_token_usage
+from tokens_usage import log_token_usage #To run the test directly with this folder as root
 
 # Load environment variables from .env file
 load_dotenv()
