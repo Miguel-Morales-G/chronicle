@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-19
 
-This document is a live implementation snapshot intended for context handoff to other AI-assisted sessions. It complements `/home/runner/work/chronicle/chronicle/README.md` with concrete current-state details.
+This document is a live implementation snapshot intended for context handoff to both humans and AI-assisted sessions. It complements `/home/runner/work/chronicle/chronicle/README.md` with concrete current-state details.
 
 ## 1) Current Scope (Implemented vs Planned)
 
