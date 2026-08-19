@@ -12,8 +12,8 @@ This document outlines the Continuous Integration (CI) setup implemented for the
 
 ### Triggers
 The workflow runs automatically on:
-- **Push events** to `main` and `develop` branches
-- **Pull requests** to `main` and `develop` branches
+- **Push events** to `master` and `develop` branches
+- **Pull requests** to `master` and `develop` branches
 
 ### What the Workflow Does
 
@@ -112,11 +112,11 @@ Consider using GitHub's automatic artifact retention or add this to workflow:
 
 ### Required Configuration After Committing Workflow
 
-#### 1. **Enable Branch Protection Rules** (Recommended for main)
+#### 1. **Enable Branch Protection Rules** (Recommended for master)
 
 Go to: **Settings → Branches → Add rule**
 
-For the `main` branch, configure:
+For the `master` branch, configure:
 - ✅ **Require status checks to pass before merging**
   - Required checks: "test (3.12)" (the job name from workflow)
   - Dismiss stale PR approvals when new commits are pushed
@@ -168,8 +168,8 @@ pytest tests/test_audit_checks.py::test_count_dec_entries -v
 ## Workflow Execution Details
 
 ### When Workflow Triggers
-- On every push to `main` or `develop`
-- On every PR to `main` or `develop`
+- On every push to `master` or `develop`
+- On every PR to `master` or `develop`
 - Job completes in ~1-2 minutes (depending on dependency installation)
 
 ### Viewing Results
@@ -210,7 +210,7 @@ pytest tests/test_audit_checks.py::test_count_dec_entries -v
 
 **Issue: Workflow doesn't run on push**
 - Cause: Branch name doesn't match trigger config
-- Fix: Verify branch names are `main` or `develop` (or update workflow)
+- Fix: Verify branch names are `master` or `develop` (or update workflow)
 
 ## Validation
 
